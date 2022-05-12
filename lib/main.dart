@@ -1,115 +1,396 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:math';
+import 'dart:core';
 
-void main() {
-  runApp(const MyApp());
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:rxdart/rxdart.dart';
+import 'package:sensors_plus/sensors_plus.dart';
+import 'package:sleek_circular_slider/sleek_circular_slider.dart';
+import 'package:vector_math/vector_math.dart';
+
+class AccelerometerAngles {
+  final String xAngle;
+  final String yAngle;
+  final String zAngle;
+
+  AccelerometerAngles(this.xAngle, this.yAngle, this.zAngle);
 }
 
+class Heading {
+  final double headingAngles;
+
+  Heading(this.headingAngles);
+}
+
+// We create a "provider", which will store a value (here "Hello world").
+// By using a provider, this allows us to mock/override the value exposed.
+final accStreamProvider = StreamProvider.autoDispose<AccelerometerAngles>((_) {
+  Stream<AccelerometerAngles> stream;
+
+  stream = accelerometerEvents.map((accData) {
+    var x = (-1*degrees(atan2(-accData.y, -accData.z) - pi)).toStringAsFixed(2);
+    var y = (-1*degrees(atan2(-accData.x, -accData.z) - pi)).toStringAsFixed(2);
+    var z = (-1*degrees(atan2(-accData.y, -accData.x) - pi)).toStringAsFixed(2);
+    return AccelerometerAngles(x,y,z);
+  });
+
+  // stream = accelerometerEvents.map((accData) {
+  //   var x = degrees(atan2(accData.x, sqrt((accData.y * accData.y) + (accData.z * accData.z)))).toStringAsFixed(2);
+  //   var y = degrees(atan2(accData.y, sqrt((accData.x * accData.x) + (accData.z * accData.z)))).toStringAsFixed(2);
+  //   var z = degrees(atan2(sqrt((accData.x * accData.x) + (accData.y * accData.y)), accData.z)).toStringAsFixed(2);
+  //   return AccelerometerAngles(x,y,z);
+  // });
+
+  return stream;
+});
+
+final accStreamProvider2 = StreamProvider.autoDispose<AccelerometerEvent>((_) {
+  return accelerometerEvents;
+});
+
+final gyroStreamProvider = StreamProvider.autoDispose<GyroscopeEvent>((_) {
+  return gyroscopeEvents;
+});
+
+final magnetoStreamProvider = StreamProvider.autoDispose<MagnetometerEvent>((_) {
+  return magnetometerEvents;
+});
+
+double calculateHeading(AccelerometerEvent A, MagnetometerEvent E) {
+
+  //cross product of the magnetic field vector and the gravity vector
+  double Hx = E.y * A.z - E.z * A.y;
+  double Hy = E.z * A.x - E.x * A.z;
+  double Hz = E.x * A.y - E.y * A.x;
+
+  //normalize the values of resulting vector
+  double invH = 1.0 / sqrt(Hx * Hx + Hy * Hy + Hz * Hz);
+  Hx = Hx * invH;
+  Hy = Hy * invH;
+  Hz = Hz * invH;
+
+  //normalize the values of gravity vector
+  double invA = 1.0 / sqrt(A.x * A.x + A.y * A.y + A.z * A.z);
+  double Ax = A.x * invA;
+  double Ay = A.y * invA;
+  double Az = A.z * invA;
+
+  //cross product of the gravity vector and the new vector H
+  double Mx = Ay * Hz - Az * Hy;
+  double My = Az * Hx - Ax * Hz;
+  double Mz = Ax * Hy - Ay * Hx;
+
+  //arctangent to obtain heading in radians
+  return atan2(Hy, My);
+}
+
+double convertRadtoDeg(double rad) {
+  return (rad / pi) * 180;
+}
+
+//map angle from [-180,180] range to [0,360] range
+double map180to360(double angle) {
+  return (angle + 360) % 360;
+}
+
+final headingStreamProvider = StreamProvider.autoDispose<Heading>((ref) {
+
+  final controller = StreamController<Heading>();
+
+  final Stream<AccelerometerEvent> accStream = accelerometerEvents;
+  final Stream<MagnetometerEvent> magnetoStream = magnetometerEvents;
+
+  CombineLatestStream.list([accStream, magnetoStream]).listen((value) {
+    var temp = calculateHeading(value.elementAt(0) as AccelerometerEvent, value.elementAt(1) as MagnetometerEvent);
+    //print(map180to360(convertRadtoDeg(temp)));
+    if(!controller.isClosed){
+    controller.add(Heading(map180to360(convertRadtoDeg(temp))));
+    }
+  });
+
+  ref.onDispose(() {
+    // Closes the StreamController when the state of this provider is destroyed.
+    controller.close();
+  });
+
+  // CombineLatestStream.list([accStream, magnetoStream]).map((value) {
+  //   print(value);
+  //   return Heading(1);
+  // });
+
+  return controller.stream;
+  
+});
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(
+    const ProviderScope(
+      child: MaterialApp(
+        home: MyApp(),
+        debugShowCheckedModeBanner: false,
+      ),
+    ),
+  );
+}
+
+// Extend ConsumerWidget instead of StatelessWidget, which is exposed by Riverpod
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
+    return SafeArea(
+      child: Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: const Text(
+            'Practices',
+          ),
+        ),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              const AccWidget(),
+              const Acc2Widget(),
+              //const GyroWidget(),
+              //const MagnetoWidget(),
+              ElevatedButton(
+                  onPressed: () {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const SecondRoute()),
+                      (route) => false,
+                    );
+                  },
+                  child: const Text('Next page')),
+            ],
+          ),
+        ),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({Key? key, required this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+class SecondRoute extends StatelessWidget {
+  const SecondRoute({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
+    return SafeArea(
+      child: Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: const Text(
+            'Practices page 2',
+          ),
+        ),
+        body: Center(
+          child: Column(
+            children: [
+              const HeadingWidget(),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (context) => const MyApp()),
+                    (route) => false,
+                  );
+                },
+                child: const Text('Main page'),
+              ),
+            ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class GyroWidget extends ConsumerWidget {
+  const GyroWidget({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    AsyncValue<GyroscopeEvent> gyroStream = ref.watch(gyroStreamProvider);
+
+    return gyroStream.when(
+      data: (data) {
+        return Text(data.toString());
+      },
+      error: (err, stack) => Text('Error: $err'),
+      loading: () => const CircularProgressIndicator(),
+    );
+  }
+}
+
+class Acc2Widget extends ConsumerWidget {
+  const Acc2Widget({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    AsyncValue<AccelerometerEvent> acc2Stream = ref.watch(accStreamProvider2);
+
+    return acc2Stream.when(
+      data: (data) {
+        return Text("X: ${(data.x / 9.8).toStringAsFixed(2)}g, Y: ${(data.y / 9.8).toStringAsFixed(2)}g, Z: ${(data.z / 9.8).toStringAsFixed(2)}g");
+      },
+      error: (err, stack) => Text('Error: $err'),
+      loading: () => const CircularProgressIndicator(),
+    );
+  }
+}
+
+class MagnetoWidget extends ConsumerWidget {
+  const MagnetoWidget({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    AsyncValue<MagnetometerEvent> magnetoStream = ref.watch(magnetoStreamProvider);
+
+    return magnetoStream.when(
+      data: (data) {
+        return Text(data.toString());
+      },
+      error: (err, stack) => Text('Error: $err'),
+      loading: () => const CircularProgressIndicator(),
+    );
+  }
+}
+
+class HeadingWidget extends ConsumerWidget {
+  const HeadingWidget({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    AsyncValue<Heading> headingStream = ref.watch(headingStreamProvider);
+
+    return headingStream.when(
+      data: (data) {
+        return Column(
+          children: [
+            Text("Compass: ${data.headingAngles.toStringAsFixed(2)}"),
+            SleekCircularSlider(
+              initialValue: data.headingAngles,
+              min: 0,
+              max: 360,
+              appearance: CircularSliderAppearance(
+                animationEnabled: false,
+                startAngle: 0,
+                angleRange: 360,
+                infoProperties: InfoProperties(
+                  modifier: (value) {
+                    String output = "";
+                    if (value > 337.25 || value < 22.5) {
+                      output = "N";
+                    } else if (292.5 < value && value < 337.25) {
+                      output = "NW";
+                    } else if (247.5 < value && value < 292.5) {
+                      output = "W";
+                    } else if (202.5 < value && value < 247.5) {
+                      output = "SW";
+                    } else if (157.5 < value && value < 202.5) {
+                      output = "S";
+                    } else if (112.5 < value && value < 157.5) {
+                      output = "SE";
+                    } else if (67.5 < value && value < 112.5) {
+                      output = "E";
+                    } else if (0 < value && value < 67.5) {
+                      output = "NE";
+                    }
+                    return output;
+                  },
+                ),
+              ),
+              onChange: null,
+            ),
+          ],
+        );
+      },
+      error: (err, stack) => Text('Error: $err'),
+      loading: () => const CircularProgressIndicator(),
+    );
+  }
+}
+
+class AccWidget extends ConsumerWidget {
+  const AccWidget({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    AsyncValue<AccelerometerAngles> accStream = ref.watch(accStreamProvider);
+
+    return Center(
+      child: Column(
+        children: [
+          const Text("XYZ Degree:"),
+          accStream.when(
+            data: (data) {
+              //return Text("X: ${data.xAngle}\u00B0, Y: ${data.yAngle}\u00B0, Z: ${data.zAngle}\u00B0");
+            return Column(
+              children: [
+                const Text("X Degree:"),
+                SleekCircularSlider(
+                  initialValue: double.parse(data.xAngle),
+                  min: 0,
+                  max: 360,
+                  appearance: CircularSliderAppearance(
+                    animationEnabled: false,
+                    startAngle: 0,
+                    angleRange: 360,
+                    infoProperties: InfoProperties(
+                      modifier: (value) {
+                        return "${value.toStringAsFixed(2)}\u00B0";
+                      },
+                    ),
+                  ),
+                  onChange: null,
+                ),
+                const Text("Y Degree:"),
+                SleekCircularSlider(
+                  initialValue: double.parse(data.yAngle),
+                  min: 0,
+                  max: 360,
+                  appearance: CircularSliderAppearance(
+                    animationEnabled: false,
+                    startAngle: 0,
+                    angleRange: 360,
+                    infoProperties: InfoProperties(
+                      modifier: (value) {
+                        return "${value.toStringAsFixed(2)}\u00B0";
+                      },
+                    ),
+                  ),
+                  onChange: null,
+                ),
+                const Text("Z Degree:"),
+                SleekCircularSlider(
+                  initialValue: double.parse(data.zAngle),
+                  min: 0,
+                  max: 360,
+                  appearance: CircularSliderAppearance(
+                    animationEnabled: false,
+                    startAngle: 0,
+                    angleRange: 360,
+                    infoProperties: InfoProperties(
+                      modifier: (value) {
+                        return "${value.toStringAsFixed(2)}\u00B0";
+                      },
+                    ),
+                  ),
+                  onChange: null,
+                ),
+              ],
+            );
+            },
+            error: (err, stack) => Text('Error: $err'),
+            loading: () => const CircularProgressIndicator(),
+          ),
+        ],
+      ),
     );
   }
 }
